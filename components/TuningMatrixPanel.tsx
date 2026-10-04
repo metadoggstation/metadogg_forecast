@@ -30,6 +30,11 @@ export function tuneValue(p: IndicatorParam, s: ChartUIState, idx: number): numb
   return p.max <= 5 ? Math.round(raw * 10) / 10 : Math.round(raw);
 }
 
+/** Externally supplied tuning result (e.g. streamed by the simulation backend). */
+export interface TunedParam extends IndicatorParam {
+  previous: number;
+}
+
 const SCRAMBLE_MS = 600;
 
 const Meter: React.FC<{ p: IndicatorParam; prev: number; scrambling: boolean }> = ({ p, prev, scrambling }) => {
@@ -62,15 +67,20 @@ interface Props {
   chartState: ChartUIState;
   initialParams?: IndicatorParam[];
   onTune?: (params: IndicatorParam[]) => void;
+  /** When set, values come from here instead of the internal tuner. */
+  tuned?: TunedParam[];
+  /** Fast-forward effect: meters flicker and morph continuously. */
+  turbo?: boolean;
 }
 
-export const TuningMatrixPanel: React.FC<Props> = ({ chartState, initialParams = DEFAULT_PARAMS, onTune }) => {
+export const TuningMatrixPanel: React.FC<Props> = ({ chartState, initialParams = DEFAULT_PARAMS, onTune, tuned, turbo = false }) => {
   const [params, setParams] = useState(initialParams);
   const [prev, setPrev] = useState<number[]>(initialParams.map((p) => p.value));
   const [scrambling, setScrambling] = useState(false);
   const first = useRef(true);
 
   useEffect(() => {
+    if (tuned) return;
     if (first.current) {
       first.current = false;
       return;
@@ -95,8 +105,8 @@ export const TuningMatrixPanel: React.FC<Props> = ({ chartState, initialParams =
       <div style={{ fontSize: 10, color: "#888", marginBottom: 10 }}>
         SDF {chartState.sdf.toFixed(3)} / G-TENSOR {chartState.gravityTensor.toFixed(3)}
       </div>
-      {params.map((p, i) => (
-        <Meter key={`${p.indicator}-${p.name}`} p={p} prev={prev[i]} scrambling={scrambling} />
+      {(tuned ?? params).map((p, i) => (
+        <Meter key={`${p.indicator}-${p.name}`} p={p} prev={tuned ? tuned[i].previous : prev[i]} scrambling={scrambling || turbo} />
       ))}
     </aside>
   );
