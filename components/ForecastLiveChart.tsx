@@ -1,5 +1,5 @@
-import React, { useMemo } from "react";
-import TuningMatrixPanel, { ChartUIState } from "./TuningMatrixPanel";
+import React, { useEffect, useMemo, useState } from "react";
+import TuningMatrixPanel, { ChartUIState, TunedParam } from "./TuningMatrixPanel";
 
 export interface Candle { open: number; high: number; low: number; close: number }
 
@@ -18,6 +18,12 @@ interface Props {
   chartState: ChartUIState;
   width?: number;
   height?: number;
+  /** Fast-forward effect: prediction boxes flicker and morph rapidly. */
+  turbo?: boolean;
+  /** Streamed tuning values forwarded to the embedded panel. */
+  tuned?: TunedParam[];
+  /** Hide the embedded TuningMatrixPanel (when it is placed separately). */
+  hidePanel?: boolean;
 }
 
 const LAYERS: { key: keyof ForecastSet; color: string; opacity: number; glow?: boolean }[] = [
@@ -35,7 +41,15 @@ export function overlapZone(forecast: ForecastSet, step: number): PredictionBox 
   return low < high ? { low, high } : null;
 }
 
-export const ForecastLiveChart: React.FC<Props> = ({ candles, forecast, chartState, width = 720, height = 400 }) => {
+export const ForecastLiveChart: React.FC<Props> = ({ candles, forecast, chartState, width = 720, height = 400, turbo = false, tuned, hidePanel = false }) => {
+  const [flick, setFlick] = useState(0);
+  useEffect(() => {
+    if (!turbo) { setFlick(0); return; }
+    const id = setInterval(() => setFlick((f) => f + 1), 70);
+    return () => clearInterval(id);
+  }, [turbo]);
+  /** Deterministic pseudo-random in [0,1) per (frame, layer, step). */
+  const jitter = (a: number, b: number) => Math.abs(Math.sin((flick + 1) * 12.9898 + a * 78.233 + b * 37.719) * 43758.5453) % 1;
   const steps = Math.max(0, ...LAYERS.map((l) => forecast[l.key].length));
   const slot = width / (candles.length + steps + 1);
 
@@ -73,12 +87,16 @@ export const ForecastLiveChart: React.FC<Props> = ({ candles, forecast, chartSta
           const zone = overlapZone(forecast, s);
           return (
             <g key={s}>
-              {LAYERS.map((l) => {
+              {LAYERS.map((l, li) => {
                 const b = forecast[l.key][s];
                 if (!b) return null;
+                const j = turbo ? jitter(li, s) : 0;
+                const scale = turbo ? 0.7 + j * 0.6 : 1;
+                const h = Math.max(1, toY(b.low) - toY(b.high)) * scale;
+                const mid = (toY(b.high) + toY(b.low)) / 2;
                 return (
-                  <rect key={l.key} x={cx - slot * 0.4} width={slot * 0.8} y={toY(b.high)} height={Math.max(1, toY(b.low) - toY(b.high))}
-                    fill={l.color} fillOpacity={l.opacity} stroke={l.color} filter={l.glow ? "url(#glow)" : undefined} />
+                  <rect key={l.key} x={cx - slot * 0.4} width={slot * 0.8} y={turbo ? mid - h / 2 : toY(b.high)} height={h}
+                    fill={l.color} fillOpacity={turbo ? 0.15 + j * 0.6 : l.opacity} stroke={l.color} filter={l.glow ? "url(#glow)" : undefined} />
                 );
               })}
               {zone && (
@@ -89,7 +107,7 @@ export const ForecastLiveChart: React.FC<Props> = ({ candles, forecast, chartSta
           );
         })}
       </svg>
-      <TuningMatrixPanel chartState={chartState} />
+      {!hidePanel && <TuningMatrixPanel chartState={chartState} tuned={tuned} turbo={turbo} />}
     </div>
   );
 };
