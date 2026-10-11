@@ -68,3 +68,57 @@ def select_best_params(candidates: Sequence[dict], backtest) -> tuple:
         if r > best_r:
             best, best_r = params, r
     return (best, best_r) if best is not None else (None, 0.0)
+
+
+# --- Proof of Forecast ($MEAT) scoring: beef = trend-following, chicken = defensive ---
+BEEF_TENSION_MIN = 0.6        # tension_stress at/above which beef earns the multiplier
+BEEF_MULTIPLIER_MAX = 1.5     # max extra multiplier (applied at beef=1, tension=1)
+LIQUIDATE_CROSSING_MIN = 5    # knot_crossing at/above which a range market is "tangled"
+LIQUIDATE_BEEF_MIN = 0.6      # beef ratio considered over-aggressive
+LIQUIDATE_MAX_PENALTY = 0.5   # max fraction of base reward removed
+RANGE_EFFICIENCY_MAX = 0.3    # |net move| / path length below this = range-bound
+CRASH_DRAWDOWN_MIN = 0.10     # market drawdown that makes a dataset a "crash"
+DEFENSE_BONUS_WEIGHT = 100.0  # $MEAT per unit of avoided drawdown
+
+
+def compute_pof_score(
+    base_reward: float,
+    beef_ratio: float,
+    tension_stress: float,
+    knot_crossing: int,
+    continuation_rate: float,
+    efficiency_ratio: float,
+    market_drawdown: float,
+) -> dict:
+    """Combine the backtest reward with beef/chicken modifiers into a $MEAT score.
+
+    beef_ratio in [0, 1] (chicken = 1 - beef); tension_stress in [0, 1];
+    continuation_rate / efficiency_ratio in [0, 1]; market_drawdown >= 0 (fraction).
+    """
+    beef = min(max(beef_ratio, 0.0), 1.0)
+    chicken = 1.0 - beef
+
+    beef_multiplier = 1.0
+    if tension_stress >= BEEF_TENSION_MIN and continuation_rate >= 0.5:
+        beef_multiplier += (BEEF_MULTIPLIER_MAX - 1.0) * 2 * beef * tension_stress * (continuation_rate - 0.5) \
+            + (BEEF_MULTIPLIER_MAX - 1.0) * beef * tension_stress * 0.5
+
+    liquidation_penalty = 0.0
+    if (efficiency_ratio < RANGE_EFFICIENCY_MAX and knot_crossing >= LIQUIDATE_CROSSING_MIN
+            and beef > LIQUIDATE_BEEF_MIN):
+        over = (beef - LIQUIDATE_BEEF_MIN) / (1.0 - LIQUIDATE_BEEF_MIN)
+        crossing = min(knot_crossing / (2.0 * LIQUIDATE_CROSSING_MIN), 1.0)
+        liquidation_penalty = LIQUIDATE_MAX_PENALTY * over * crossing
+
+    defense_bonus = 0.0
+    if market_drawdown >= CRASH_DRAWDOWN_MIN:
+        defense_bonus = DEFENSE_BONUS_WEIGHT * chicken * market_drawdown
+
+    scaled = base_reward * beef_multiplier * (1.0 - liquidation_penalty)
+    return {
+        "baseReward": base_reward,
+        "beefMultiplier": beef_multiplier,
+        "liquidationPenalty": liquidation_penalty,
+        "defenseBonus": defense_bonus,
+        "finalScore": max(scaled + defense_bonus, 0.0),
+    }

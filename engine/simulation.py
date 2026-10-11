@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
 
-from engine.reward_optimizer import compute_reward, summarize_trades
+from engine.reward_optimizer import compute_pof_score, compute_reward, summarize_trades
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "simulation"
 
@@ -182,3 +182,47 @@ def generate_ticks(scenario: str, start: int = 0, bars: Optional[List[dict]] = N
             "trade": trade,
             "score": trader.score(),
         }
+
+
+def market_profile(bars: List[dict]) -> dict:
+    """Dataset-level stats used by PoF scoring: continuation rate, efficiency ratio, max drawdown."""
+    closes = [b["close"] for b in bars]
+    rets = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    pairs = list(zip(rets, rets[1:]))
+    cont = sum(1 for a, b in pairs if a * b > 0) / len(pairs) if pairs else 0.0
+    path = sum(abs(r) for r in rets)
+    efficiency = abs(closes[-1] - closes[0]) / path if path > 0 else 0.0
+    peak, dd = closes[0], 0.0
+    for c in closes:
+        peak = max(peak, c)
+        dd = max(dd, (peak - c) / peak)
+    return {"continuationRate": cont, "efficiencyRatio": efficiency, "maxDrawdown": dd,
+            "netReturn": (closes[-1] - closes[0]) / closes[0]}
+
+
+def run_pof_backtest(scenario: str, beef_ratio: float, knot_crossing: int,
+                     tension_stress: float, topology_phase: str = "unknown") -> dict:
+    """Backtest a chamber (beef/chicken ratio) on one scenario and return its $MEAT PoF score."""
+    bars = load_bars(scenario)
+    trader = VirtualTrader()
+    for i in range(len(bars)):
+        sdf, _ = compute_sdf(bars, i)
+        trader.on_bar(bars[i], sdf, bars[i - 1]["close"] if i > 0 else None)
+    stats = trader.score()
+    profile = market_profile(bars)
+    breakdown = compute_pof_score(
+        stats["totalReward"], beef_ratio, tension_stress, knot_crossing,
+        profile["continuationRate"], profile["efficiencyRatio"], profile["maxDrawdown"],
+    )
+    return {
+        "scenario": {"id": scenario, "label": SCENARIOS[scenario]["label"],
+                     "file": SCENARIOS[scenario]["file"], "bars": len(bars)},
+        "chamber": {"beef": beef_ratio, "chicken": 1.0 - beef_ratio},
+        "oracle": {"knot_crossing": knot_crossing, "tension_stress": tension_stress,
+                   "topology_phase": topology_phase},
+        "market": profile,
+        "backtest": stats,
+        "breakdown": breakdown,
+        "score": breakdown["finalScore"],
+        "unit": "$MEAT",
+    }
