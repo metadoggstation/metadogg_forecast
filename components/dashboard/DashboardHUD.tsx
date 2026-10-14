@@ -6,12 +6,13 @@ import type { KnotMetrics, WeatherState } from "../../lib/simulationTypes";
 
 export interface DashboardHUDProps {
   fuel: number;
-  gasPriceGwei: number;
   knotMetrics: KnotMetrics;
   recommendedGear: string;
   walletLabel: string;
   onTrunkOpen?: () => void;
 }
+
+const BASE_GAS_GWEI = 30;
 
 interface WeatherPresentation {
   badge: string;
@@ -28,7 +29,7 @@ const WEATHER_PRESENTATION: Record<WeatherState, WeatherPresentation> = {
     badge: "CLEAR // 順風満帆",
     icon: "☀",
     description: "Stable market / normal fuel burn",
-    containerClass: "border-cyan-300/20 bg-[#090d16] shadow-[0_0_60px_rgba(0,212,255,0.08)]",
+    containerClass: "border-cyan-300/30 bg-gradient-to-br from-[#071a2b] via-[#090d16] to-[#10102a] shadow-[0_0_60px_rgba(0,212,255,0.12)]",
     badgeClass: "border-lime-300/30 bg-lime-300/5 text-lime-300",
     ringClass: "border-t-cyan-300 border-r-fuchsia-400",
     multiplier: 1,
@@ -45,11 +46,11 @@ const WEATHER_PRESENTATION: Record<WeatherState, WeatherPresentation> = {
   STAGNANT: {
     badge: "STAGNANT // もみ合い",
     icon: "◌",
-    description: "Chicken anti-stall assist / range market",
+    description: "Low knot activity / 1.2x fuel burn",
     containerClass: "border-amber-300/30 bg-gradient-to-br from-[#171309] via-[#101015] to-[#090d16] shadow-[0_0_60px_rgba(251,191,36,0.12)]",
     badgeClass: "border-amber-300/40 bg-amber-300/10 text-amber-200",
     ringClass: "border-t-amber-300 border-r-violet-400",
-    multiplier: 1,
+    multiplier: 1.2,
   },
 };
 
@@ -58,42 +59,40 @@ function clamp(value: number) {
 }
 
 export function getWeatherState({ tensionStress, knotCrossing }: KnotMetrics): WeatherState {
-  if (tensionStress >= 70) return "TURBULENCE";
-  if (knotCrossing >= 15) return "STAGNANT";
+  if (tensionStress >= 70 || knotCrossing >= 8) return "TURBULENCE";
+  if (knotCrossing >= 3) return "STAGNANT";
   return "CLEAR";
 }
 
-export function calculateFuelEfficiency(baseGas: number, { tensionStress, knotCrossing }: KnotMetrics): number {
+export function calculateFuelEfficiency(baseGas: number, weather: WeatherState): number {
   const normalizedGas = Math.max(0, baseGas);
-  const normalizedStress = Math.max(0, tensionStress);
-  return normalizedGas * (1 + normalizedStress / 100) * (knotCrossing > 10 ? 1.5 : 1);
+  return normalizedGas * WEATHER_PRESENTATION[weather].multiplier;
 }
 
 export function useFuelEfficiency(baseGas: number, knotMetrics: KnotMetrics) {
   return useMemo(() => {
     const weather = getWeatherState(knotMetrics);
-    const baseFuelEfficiency = calculateFuelEfficiency(baseGas, knotMetrics);
     const weatherMultiplier = WEATHER_PRESENTATION[weather].multiplier;
+    const baseFuelEfficiency = baseGas;
 
     return {
       weather,
       baseFuelEfficiency,
       weatherMultiplier,
-      fuelEfficiency: baseFuelEfficiency * weatherMultiplier,
+      fuelEfficiency: calculateFuelEfficiency(baseGas, weather),
     };
   }, [baseGas, knotMetrics]);
 }
 
 export default function DashboardHUD({
   fuel,
-  gasPriceGwei,
   knotMetrics,
   recommendedGear,
   walletLabel,
   onTrunkOpen,
 }: DashboardHUDProps) {
   const [trunkOpen, setTrunkOpen] = useState(false);
-  const { weather, baseFuelEfficiency, weatherMultiplier, fuelEfficiency } = useFuelEfficiency(gasPriceGwei, knotMetrics);
+  const { weather, baseFuelEfficiency, weatherMultiplier, fuelEfficiency } = useFuelEfficiency(BASE_GAS_GWEI, knotMetrics);
   const normalizedTension = clamp(knotMetrics.tensionStress);
   const weatherPresentation = WEATHER_PRESENTATION[weather];
 
@@ -148,9 +147,10 @@ export default function DashboardHUD({
               <span className="font-mono text-lg font-bold text-cyan-200">{normalizedTension.toFixed(0)}</span>
             </div>
             <div className="space-y-2 font-mono text-[11px]">
-              <div><span className="text-slate-500">BASE GAS</span><span className="ml-3 text-amber-300">{gasPriceGwei.toFixed(2)} GWEI</span></div>
+              <div><span className="text-slate-500">BASE GAS</span><span className="ml-3 text-amber-300">{baseFuelEfficiency.toFixed(2)} GWEI</span></div>
               <div><span className="text-slate-500">KNOT WEATHER</span><span className="ml-3 text-fuchsia-300">{normalizedTension.toFixed(0)}%</span></div>
               <div><span className="text-slate-500">KNOT CROSSING</span><span className="ml-3 text-cyan-200">{knotMetrics.knotCrossing.toFixed(1)}</span></div>
+              <div><span className="text-slate-500">TOPOLOGY PHASE</span><span className="ml-3 text-cyan-200">{knotMetrics.topologyPhase}</span></div>
               <div className="text-slate-600">BASE {baseFuelEfficiency.toFixed(2)} × WEATHER {weatherMultiplier.toFixed(1)}X</div>
             </div>
           </div>
