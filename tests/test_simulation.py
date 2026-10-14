@@ -77,3 +77,11 @@ def test_stream_endpoint():
     assert c.get("/simulation/stream", params={"scenario": "x"}).status_code == 404
     r = c.get("/simulation/stream", params={"scenario": "btc_ath", "start": 100, "lookback": 30, "interval": 0})
     assert r.text.strip().split("\n")[0].startswith('{"index": 70,')
+
+
+def test_pof_defense_and_beef_in_crash():
+    from engine.simulation import run_pof_backtest
+    chicken = run_pof_backtest("covid_2020_03", 0.0, 1, 0.9)
+    beef = run_pof_backtest("covid_2020_03", 1.0, 1, 0.9)
+    assert chicken["breakdown"]["defenseBonus"] > beef["breakdown"]["defenseBonus"]
+    assert chicken["unit"] == "$MEAT" and chicken["scenario"]["id"] == "covid_2020_03"

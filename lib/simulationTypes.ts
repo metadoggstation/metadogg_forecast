@@ -34,3 +34,11 @@ export interface ScoreSnapshot {
 
 export interface ScenarioInfo { id: string; label: string; total: number }
 export type Speed = 1 | 2 | 4 | 10;
+
+export type WeatherState = "CLEAR" | "TURBULENCE" | "STAGNANT";
+
+export interface KnotMetrics {
+  tensionStress: number;
+  knotCrossing: number;
+  topologyPhase: string;
+}

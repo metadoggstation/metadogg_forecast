@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { POF_SESSION_EVENT, POF_STORAGE_KEY, type PofSession } from "./LiveScoreBoard";
 
 export interface ChartUIState {
   /** Spatial distortion (SDF) value from ChartUI */
@@ -36,6 +37,18 @@ export interface TunedParam extends IndicatorParam {
 }
 
 const SCRAMBLE_MS = 600;
+const API = process.env.NEXT_PUBLIC_SIM_API ?? "http://localhost:8000";
+
+interface PofResponse {
+  score: number;
+  breakdown: Record<string, number>;
+}
+
+async function sha256(value: string): Promise<string> {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await window.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 const Meter: React.FC<{ p: IndicatorParam; prev: number; scrambling: boolean }> = ({ p, prev, scrambling }) => {
   const [shown, setShown] = useState(p.value);
@@ -77,7 +90,58 @@ export const TuningMatrixPanel: React.FC<Props> = ({ chartState, initialParams =
   const [params, setParams] = useState(initialParams);
   const [prev, setPrev] = useState<number[]>(initialParams.map((p) => p.value));
   const [scrambling, setScrambling] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [pofError, setPofError] = useState<string | null>(null);
   const first = useRef(true);
+  const activeParams = tuned ?? params;
+
+  const submitPoF = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    setPofError(null);
+    const knotCrossing = Math.max(0, Math.round(Math.abs(chartState.sdf)));
+    const tensionStress = Math.min(1, Math.max(0, Math.abs(chartState.gravityTensor)));
+    const topologyPhase = chartState.sdf >= 1 ? "trend" : chartState.sdf <= -1 ? "contraction" : "range";
+    const beefRatio = Math.min(1, Math.max(0, activeParams.length
+      ? activeParams[0].value / Math.max(activeParams[0].max, 1)
+      : 0.5));
+    const timestamp = new Date().toISOString();
+
+    try {
+      const response = await fetch(`${API}/simulation/pof`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          knot_crossing: knotCrossing,
+          tension_stress: tensionStress,
+          topology_phase: topologyPhase,
+          beef_ratio: beefRatio,
+        }),
+      });
+      if (!response.ok) throw new Error(`PoF request failed (${response.status})`);
+      const result: PofResponse = await response.json();
+      if (typeof result.score !== "number" || !result.breakdown) throw new Error("PoF response is invalid");
+
+      const stored = window.localStorage.getItem(POF_STORAGE_KEY);
+      const previous: Partial<PofSession> = stored ? JSON.parse(stored) : {};
+      const clientId = window.localStorage.getItem("metadogg_pof_client_id") ?? window.crypto.randomUUID();
+      window.localStorage.setItem("metadogg_pof_client_id", clientId);
+      const hash = await sha256(`${clientId}:${timestamp}:${result.score}:${JSON.stringify(result.breakdown)}`);
+      const session: PofSession = {
+        hash,
+        beefRatio,
+        cumulativeScore: (typeof previous.cumulativeScore === "number" ? previous.cumulativeScore : 0) + result.score,
+        timestamp,
+        breakdown: result.breakdown,
+      };
+      window.localStorage.setItem(POF_STORAGE_KEY, JSON.stringify(session));
+      window.dispatchEvent(new CustomEvent(POF_SESSION_EVENT));
+    } catch (error) {
+      setPofError(error instanceof Error ? error.message : "PoF request failed");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   useEffect(() => {
     if (tuned) return;
@@ -105,9 +169,14 @@ export const TuningMatrixPanel: React.FC<Props> = ({ chartState, initialParams =
       <div style={{ fontSize: 10, color: "#888", marginBottom: 10 }}>
         SDF {chartState.sdf.toFixed(3)} / G-TENSOR {chartState.gravityTensor.toFixed(3)}
       </div>
-      {(tuned ?? params).map((p, i) => (
+      {activeParams.map((p, i) => (
         <Meter key={`${p.indicator}-${p.name}`} p={p} prev={tuned ? tuned[i].previous : prev[i]} scrambling={scrambling || turbo} />
       ))}
+      <button type="button" onClick={submitPoF} disabled={submitting}
+        style={{ width: "100%", marginTop: 8, padding: "6px 4px", background: "#ff2bd622", color: "#ff2bd6", border: "1px solid #ff2bd6", fontFamily: "monospace", cursor: submitting ? "wait" : "pointer" }}>
+        {submitting ? "SUBMITTING..." : "TRIGGER PoF"}
+      </button>
+      {pofError && <div role="alert" style={{ marginTop: 6, color: "#ff2b5e", fontSize: 10 }}>{pofError}</div>}
     </aside>
   );
 };
