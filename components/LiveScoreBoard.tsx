@@ -1,6 +1,45 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { ScoreSnapshot } from "../lib/simulationTypes";
 
+export const POF_STORAGE_KEY = "metadogg_pof_session";
+export const POF_SESSION_EVENT = "metadogg:pof-session";
+
+export interface PofSession {
+  hash: string;
+  beefRatio: number;
+  cumulativeScore: number;
+  timestamp: string;
+  breakdown?: Record<string, number>;
+}
+
+function readPofSession(): PofSession | null {
+  if (typeof window === "undefined") return null;
+  const value = window.localStorage.getItem(POF_STORAGE_KEY);
+  if (!value) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const session = parsed as Partial<PofSession>;
+    return typeof session.cumulativeScore === "number" ? session as PofSession : null;
+  } catch {
+    return null;
+  }
+}
+
+function usePofCumulativeScore(): number {
+  const [cumulative, setCumulative] = useState(() => readPofSession()?.cumulativeScore ?? 0);
+  useEffect(() => {
+    const update = () => setCumulative(readPofSession()?.cumulativeScore ?? 0);
+    window.addEventListener(POF_SESSION_EVENT, update);
+    window.addEventListener("storage", update);
+    return () => {
+      window.removeEventListener(POF_SESSION_EVENT, update);
+      window.removeEventListener("storage", update);
+    };
+  }, []);
+  return cumulative;
+}
+
 /** Smoothly animates toward `target` (ease-out count-up). */
 function useCountUp(target: number, ms = 600): number {
   const [shown, setShown] = useState(target);
@@ -32,7 +71,8 @@ const Stat: React.FC<{ label: string; value: string; color: string }> = ({ label
 export const EMPTY_SCORE: ScoreSnapshot = { wins: 0, losses: 0, winRate: 0, averageWin: 0, averageLoss: 0, riskReward: 0, totalReward: 0 };
 
 export const LiveScoreBoard: React.FC<{ score: ScoreSnapshot }> = ({ score }) => {
-  const reward = useCountUp(score.totalReward);
+  const pofCumulative = usePofCumulativeScore();
+  const reward = useCountUp(score.totalReward + pofCumulative);
   const winRate = useCountUp(score.winRate * 100);
   const rr = useCountUp(score.riskReward);
   return (
